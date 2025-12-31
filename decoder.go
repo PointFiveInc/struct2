@@ -3,6 +3,7 @@ package struct2
 import (
 	"reflect"
 	"regexp"
+	"strings"
 )
 
 var reIgnoreSeperator = regexp.MustCompile(`[-_ ]`)
@@ -113,5 +114,26 @@ func (d *Decoder) getTagValue(field reflect.StructField) (string, string) {
 
 func (d *Decoder) parseTag(field reflect.StructField) (string, tagOptions) {
 	tagValue, _ := d.getTagValue(field)
+
+	// Check for json:inline or json:squash tag if the primary tag doesn't have them
+	if jsonTag := field.Tag.Get("json"); jsonTag != "" {
+		// Handle json:inline
+		if tagValue == "" || !(strings.Contains(tagValue, "inline") || strings.Contains(tagValue, "squash")) {
+			if jsonTag == "inline" || strings.Contains(jsonTag, ",inline") {
+				if tagValue == "" {
+					tagValue = "squash" // Use "squash" instead of "inline" to match the decoder's expectations
+				} else {
+					tagValue = tagValue + ",squash" // Use "squash" instead of "inline"
+				}
+			} else if jsonTag == "squash" || strings.Contains(jsonTag, ",squash") {
+				if tagValue == "" {
+					tagValue = "squash"
+				} else {
+					tagValue = tagValue + ",squash"
+				}
+			}
+		}
+	}
+
 	return parseTag(tagValue)
 }

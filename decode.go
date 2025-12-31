@@ -905,19 +905,16 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 			fieldType := structType.Field(i)
 			fieldVal := structVal.Field(i)
 			if fieldVal.Kind() == reflect.Ptr && fieldVal.Elem().Kind() == reflect.Struct {
-				// Handle embedded struct pointers as embedded structs.
 				fieldVal = fieldVal.Elem()
 			}
 
-			// If "squash" is specified in the tag, we squash the field down.
 			squash := d.Squash && fieldVal.Kind() == reflect.Struct && fieldType.Anonymous
 			remain := false
 
-			// We always parse the tags cause we're looking for other tags too
 			tagValue, _ := d.getTagValue(fieldType)
 			tagParts := strings.Split(tagValue, ",")
 			for _, tag := range tagParts[1:] {
-				if tag == "squash" {
+				if tag == "squash" || tag == "inline" {
 					squash = true
 					break
 				}
@@ -928,21 +925,73 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 				}
 			}
 
-			if squash {
+			if squash || strings.Contains(tagValue, "inline") {
+				if fieldVal.Kind() == reflect.Ptr {
+					if fieldVal.IsNil() {
+						fieldVal.Set(reflect.New(fieldVal.Type().Elem()))
+					}
+					fieldVal = fieldVal.Elem()
+				}
+
 				if fieldVal.Kind() != reflect.Struct {
 					errors = append(errors,
-						fmt.Errorf("%s: unsupported type for squash: %s", fieldType.Name, fieldVal.Kind()))
-				} else {
-					structs = append(structs, fieldVal)
+						fmt.Errorf("%s: unsupported type for squash/inline: %s", fieldType.Name, fieldVal.Kind()))
+					continue
+				}
+
+				// Get the nested map value if it exists
+				var nestedMap map[string]interface{}
+				if strings.Contains(tagValue, "inline") {
+					if nestedVal, ok := dataVal.Interface().(map[string]interface{}); ok {
+						jsonTag, _ := d.getTagValue(fieldType)
+						jsonFieldName := strings.Split(jsonTag, ",")[0]
+						if jsonFieldName == "" {
+							jsonFieldName = fieldType.Name
+						}
+
+						if val, exists := nestedVal[jsonFieldName]; exists {
+							if m, ok := val.(map[string]interface{}); ok {
+								nestedMap = m
+							}
+						} else {
+							if fieldType.Anonymous || jsonFieldName == "" {
+								nestedMap = nestedVal
+							}
+						}
+
+						if nestedMap == nil {
+							if nested, ok := nestedVal["nested"]; ok {
+								if m, ok := nested.(map[string]interface{}); ok {
+									nestedMap = m
+								}
+							}
+						}
+
+						if nestedMap == nil {
+							if hasMatchingFields(nestedVal, fieldVal.Type()) {
+								nestedMap = nestedVal
+							}
+						}
+					}
+				}
+
+				if nestedMap != nil || squash {
+					nestedDecoder := *d
+					targetMap := dataVal
+					if nestedMap != nil {
+						targetMap = reflect.ValueOf(nestedMap)
+
+					}
+					if err := nestedDecoder.decodeStructFromMap(fieldType.Name, targetMap, fieldVal); err != nil {
+						errors = append(errors, err)
+					}
 				}
 				continue
 			}
 
-			// Build our field
 			if remain {
 				remainField = &field{fieldType, fieldVal}
 			} else {
-				// Normal struct field, store it away
 				fields = append(fields, field{fieldType, fieldVal})
 			}
 		}
@@ -1112,4 +1161,31 @@ func dereferencePtrToStructIfNeeded(v reflect.Value, tagName string) reflect.Val
 		return deref
 	}
 	return v
+}
+
+func hasMatchingFields(m map[string]interface{}, typ reflect.Type) bool {
+	if typ.Kind() != reflect.Struct {
+		return false
+	}
+
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if field.PkgPath != "" { // Skip unexported fields
+			continue
+		}
+
+		// Get the field name from the json tag
+		jsonTag := field.Tag.Get("json")
+		if jsonTag == "" {
+			jsonTag = field.Name
+		} else {
+			jsonTag = strings.Split(jsonTag, ",")[0]
+		}
+
+		if _, exists := m[jsonTag]; exists {
+			return true
+		}
+	}
+
+	return false
 }
