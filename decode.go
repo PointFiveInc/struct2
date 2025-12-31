@@ -905,12 +905,15 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 			fieldType := structType.Field(i)
 			fieldVal := structVal.Field(i)
 			if fieldVal.Kind() == reflect.Ptr && fieldVal.Elem().Kind() == reflect.Struct {
+				// Handle embedded struct pointers as embedded structs.
 				fieldVal = fieldVal.Elem()
 			}
 
+			// If "squash" is specified in the tag, we squash the field down.
 			squash := d.Squash && fieldVal.Kind() == reflect.Struct && fieldType.Anonymous
 			remain := false
 
+			// We always parse the tags cause we're looking for other tags too
 			tagValue, _ := d.getTagValue(fieldType)
 			tagParts := strings.Split(tagValue, ",")
 			for _, tag := range tagParts[1:] {
@@ -989,6 +992,7 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 				continue
 			}
 
+			// Build our field
 			if remain {
 				remainField = &field{fieldType, fieldVal}
 			} else {
